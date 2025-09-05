@@ -13,6 +13,7 @@ WAIT_TIMEOUT_SECS=180            # 3 минуты
 WAIT_STEP_SECS=5                 # шаг ожидания
 
 REPO_TARBALL_URL="https://github.com/gis-masters/GIS_Platform/archive/refs/heads/main.tar.gz"
+REPO_INSTALLER_URL="https://github.com/gis-masters/GIS_Platform_installer/archive/refs/heads/main.tar.gz"
 
 ISSUES=()
 
@@ -291,12 +292,16 @@ download_and_prepare() {
   TMP_DIR="$(mktemp -d)"
   TARBALL="$TMP_DIR/GIS_Platform-main.tar.gz"
 
-  log "[1/4] Скачиваю репозиторий..."
+  log "[1/4] Скачиваю данные из основного проекта..."
   fetch_to_file "$REPO_TARBALL_URL" "$TARBALL"
 
   log "[2/4] Извлекаю ресурсы..."
   mkdir -p "$BASE_DIR/assets"
   tar -xzf "$TARBALL" --strip-components=2 -C "$BASE_DIR/assets" GIS_Platform-main/assets
+  rm -rf "$TARBALL"
+
+  log "[3/4] Скачиваю дополнительные зависимости для старта..."
+  fetch_to_file "$REPO_INSTALLER_URL" "$TARBALL"
 
   log "[3/4] Извлекаю .env и compose..."
   tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-main/.env_masters_ru_start
