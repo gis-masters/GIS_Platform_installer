@@ -304,11 +304,11 @@ download_and_prepare() {
   fetch_to_file "$REPO_INSTALLER_URL" "$TARBALL"
 
   log "[3/4] Извлекаю .env и compose..."
-  tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-main/.env_masters_ru_start
-  tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-main/gis_masters_ru_start.yml
+  tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform_installer-main/.env_masters_ru_start
+  tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform_installer-main/gis_masters_ru_start.yml
 
   log "[3.1/4] Извлекаю каталог scripts/..."
-  tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-main/scripts
+  tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform_installer-main/scripts
 
   # Подготовка окружения
   if [[ -f "$BASE_DIR/.env" ]]; then
