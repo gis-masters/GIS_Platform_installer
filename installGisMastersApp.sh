@@ -18,7 +18,7 @@ REPO_INSTALLER_URL="https://github.com/gis-masters/GIS_Platform_installer/archiv
 ISSUES=()
 
 # Сообщение при некорректном вводе (по вашей формулировке — оставлено дословно)
-ALLOWED_INPUT_MSG='Был некорректный ввод. Допусктимые значения кирилицей: Да да д Нет нет н; Латиницей: Yes yes y No no n'
+ALLOWED_INPUT_MSG='Был некорректный ввод. Допустимые значения кирилицей: Да да д Нет нет н; Латиницей: Yes yes y No no n'
 
 # -------------------- Утилиты --------------------
 log()  { printf "%s\n" "$*"; }
