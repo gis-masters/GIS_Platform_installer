@@ -12,8 +12,7 @@ EXPECTED_CONTAINERS=8            # ожидаемое количество healt
 WAIT_TIMEOUT_SECS=180            # 3 минуты
 WAIT_STEP_SECS=5                 # шаг ожидания
 
-REPO_TARBALL_URL="https://github.com/gis-masters/GIS_Platform/archive/refs/heads/main.tar.gz"
-REPO_INSTALLER_URL="https://github.com/gis-masters/GIS_Platform_installer/archive/refs/heads/main.tar.gz"
+REPO_TARBALL_URL="https://github.com/gis-masters/GIS_Platform/archive/refs/heads/master.tar.gz"
 
 ISSUES=()
 
@@ -290,32 +289,30 @@ download_and_prepare() {
   local BASE_DIR="$REQUIRED_DIR"
   local TMP_DIR TARBALL
   TMP_DIR="$(mktemp -d)"
-  TARBALL="$TMP_DIR/GIS_Platform-main.tar.gz"
+  TARBALL="$TMP_DIR/GIS_Platform-master.tar.gz"
 
   log "[1/4] Скачиваю данные из основного проекта..."
   fetch_to_file "$REPO_TARBALL_URL" "$TARBALL"
 
   log "[2/4] Извлекаю ресурсы..."
   mkdir -p "$BASE_DIR/assets"
-  tar -xzf "$TARBALL" --strip-components=2 -C "$BASE_DIR/assets" GIS_Platform-main/assets
+  tar -xzf "$TARBALL" --strip-components=2 -C "$BASE_DIR/assets" GIS_Platform-master/assets
   rm -rf "$TARBALL"
 
-  log "[3/4] Скачиваю дополнительные зависимости для старта..."
-  fetch_to_file "$REPO_INSTALLER_URL" "$TARBALL"
-
   log "[3/4] Извлекаю .env и compose..."
-  tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform_installer-main/.env_masters_ru_start
-  tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform_installer-main/gis_masters_ru_start.yml
+  tar -xzf "$TARBALL" --strip-components=2 -C "$BASE_DIR" GIS_Platform-master/.env.example
+  tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/coreApplication.yml
+  tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/openSources.yml
 
   log "[3.1/4] Извлекаю каталог scripts/..."
-  tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform_installer-main/scripts
+  tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/scripts
 
   # Подготовка окружения
   if [[ -f "$BASE_DIR/.env" ]]; then
     echo "[info] Файл .env уже существует — не перезаписываю."
   else
-    mv -f "$BASE_DIR/.env_masters_ru_start" "$BASE_DIR/.env"
-    echo "[ok] Создан .env из шаблона .env_masters_ru_start"
+    mv -f "$BASE_DIR/.env.example" "$BASE_DIR/.env"
+    echo "[ok] Создан .env из шаблона .env.example"
   fi
 
   # Права на всё под /opt/crg
@@ -334,8 +331,8 @@ download_and_prepare() {
   # --- helper: единый запуск и ожидание ---
   start_platform() {
     local dir="$1"
-    echo "[run] Перехожу в scripts и запускаю run_gis_masters_ru_start.sh ..."
-    ( cd "$dir/scripts" && ./run_gis_masters_ru_start.sh )
+    echo "[run] Перехожу в scripts и запускаю run.sh ..."
+    ( cd "$dir/scripts" && ./run.sh )
 
     echo "[wait] Ожидаю, пока контейнеры включатся (до 3 минут)..."
     while true; do
