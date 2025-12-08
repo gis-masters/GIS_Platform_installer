@@ -297,7 +297,6 @@ download_and_prepare() {
   log "[2/4] Извлекаю ресурсы..."
   mkdir -p "$BASE_DIR/assets"
   tar -xzf "$TARBALL" --strip-components=2 -C "$BASE_DIR/assets" GIS_Platform-master/assets
-  rm -rf "$TARBALL"
 
   log "[3/4] Извлекаю .env и compose..."
   tar -xzf "$TARBALL" --strip-components=2 -C "$BASE_DIR" GIS_Platform-master/.env.example
@@ -306,6 +305,7 @@ download_and_prepare() {
 
   log "[3.1/4] Извлекаю каталог scripts/..."
   tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/scripts
+  rm -rf "$TARBALL"
 
   # Подготовка окружения
   if [[ -f "$BASE_DIR/.env" ]]; then
