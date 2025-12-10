@@ -299,13 +299,12 @@ download_and_prepare() {
   tar -xzf "$TARBALL" --strip-components=2 -C "$BASE_DIR/assets" GIS_Platform-master/assets
 
   log "[3/4] Извлекаю .env и compose..."
-  tar -xzf "$TARBALL" --strip-components=2 -C "$BASE_DIR" GIS_Platform-master/.env.example
+  tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/.env.example
   tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/coreApplication.yml
   tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/openSources.yml
 
   log "[3.1/4] Извлекаю каталог scripts/..."
   tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/scripts
-  rm -rf "$TARBALL"
 
   # Подготовка окружения
   if [[ -f "$BASE_DIR/.env" ]]; then
