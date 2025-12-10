@@ -331,7 +331,7 @@ download_and_prepare() {
   start_platform() {
     local dir="$1"
     echo "[run] Перехожу в scripts и запускаю run.sh ..."
-    ( cd "$dir/scripts" && ./run.sh )
+    ( cd "$dir/scripts" && ./run.sh --MODE openSources )
 
     echo "[wait] Ожидаю, пока контейнеры включатся (до 3 минут)..."
     while true; do
