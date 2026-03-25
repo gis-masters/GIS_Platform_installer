@@ -314,11 +314,8 @@ download_and_prepare() {
 
   if [ -n "$RUNNING" ]; then
      
-     echo "[info] Останавливаю приложение."
-     docker compose -f ./coreApplication.yml -f ./openSources.yml --profile "*" down
-     
-     echo "[info] Удаляю старые образы."
-     docker images -q "gismaster/*" | while read IMAGE_ID; do docker rmi -f ${IMAGE_ID}; done
+     echo "[info] Останавливаю приложение и удаляю старые образы."
+     docker compose -f ./coreApplication.yml -f ./openSources.yml --profile "*" down --rmi all
   fi
 
   # Права на всё под /opt/crg
