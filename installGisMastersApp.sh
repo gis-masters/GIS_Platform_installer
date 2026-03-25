@@ -315,7 +315,7 @@ download_and_prepare() {
   if [ -n "$RUNNING" ]; then
      
      echo "[info] Останавливаю приложение."
-     docker compose -f ./coreApplication.yml -f ./openSources.yml --profile ui down --timeout $WAIT_TIMEOUT_SECS
+     docker compose -f ./coreApplication.yml -f ./openSources.yml --profile "*" down
      
      echo "[info] Удаляю старые образы."
      docker images -q "gismaster/*" | while read IMAGE_ID; do docker rmi -f ${IMAGE_ID}; done
