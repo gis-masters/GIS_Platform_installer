@@ -283,8 +283,6 @@ download_and_prepare() {
   sudo tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/coreApplication.yml
   sudo tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/openSources.yml
   
-  log "[3.1/4] Извлекаю каталог scripts/..."
-  sudo tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/scripts
 
   # Подготовка окружения
   if [[ -f "$BASE_DIR/.env" ]]; then
@@ -332,15 +330,23 @@ download_and_prepare() {
   echo
   echo "Готово! В каталоге $BASE_DIR появились:"
   echo " - папка assets"
-  echo " - папка scripts"
   echo " - файлы: .env, gis_masters_ru_start.yml"
   echo
 
   # --- helper: единый запуск и ожидание ---
   start_platform() {
-    local dir="$1"
-    echo "[run] Перехожу в scripts и запускаю run.sh ..."
-    ( cd "$dir/scripts" && ./run.sh --MODE openSources )
+
+    export GEOSERVER_DATA_DIR=${GEOSERVER_DATA_DIR:-/opt/crg/data/geoserver}
+    export DB_DATA_DIR=${DB_DATA_DIR:-/opt/crg/data/postgres}
+    pushd ./assets/ || exit
+    
+    ./migration-scripts/run.sh "${CRG_USER}" "${DB_PASS}" "${SECURITY_JWT_SECRET}" "${GEOSERVER_UI_LOGIN}" "${GEOSERVER_UI_CRYPTED_PASSWORD}"
+    
+    popd || exit
+    docker compose -f ./coreApplication.yml \
+        -f ./openSources.yml \
+        --env-file ./.env \
+        --profile ui up -d
 
     echo "[wait] Ожидаю, пока контейнеры включатся (до 3 минут)..."
     while true; do
