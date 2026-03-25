@@ -79,7 +79,7 @@ ask_yes_no() {
 
 # -------------------- Bootstrap: обеспечить работу в /opt/crg --------------------
 bootstrap_target_dir() {
-  local script_path script_name script_inside=0 others_exist=0 SUDO=""
+  local script_path script_name script_inside=0 SUDO=""
   script_path="$(realpath "$0" 2>/dev/null || echo "")"
   script_name="$(basename "${script_path:-installGisMastersApp.sh}")"
   [[ $EUID -ne 0 && -x "$(command -v sudo)" ]] && SUDO="sudo"
@@ -104,28 +104,8 @@ bootstrap_target_dir() {
   # 3) Скрипт уже внутри /opt/crg?
   if [[ -n "$script_path" && "$script_path" == "$REQUIRED_DIR/"* ]]; then script_inside=1; fi
 
-  # 4) Папка пустая (считая «пусто» = либо совсем пусто, либо в ней только этот скрипт)?
-  if (( script_inside )); then
-    if find "$REQUIRED_DIR" -mindepth 1 -maxdepth 1 ! -samefile "$script_path" -print -quit | grep -q .; then others_exist=1; fi
-  else
-    if find "$REQUIRED_DIR" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then others_exist=1; fi
-  fi
 
-  if (( others_exist )); then
-    echo "Папка $REQUIRED_DIR существует, но она не пустая."
-    if ask_yes_no "Желаете автоматически очистить каталог? (все данные будут утеряны)"; then
-      if (( script_inside )); then
-        $SUDO find "$REQUIRED_DIR" -mindepth 1 -maxdepth 1 ! -samefile "$script_path" -exec sudo rm -rf {} +
-      else
-        $SUDO find "$REQUIRED_DIR" -mindepth 1 -maxdepth 1 -exec sudo rm -rf {} +
-      fi
-      $SUDO chmod -R 777 "$REQUIRED_DIR" || true
-    else
-      echo "Отменено пользователем."; exit 0
-    fi
-  fi
-
-  # 5) Если скрипт не в /opt/crg — скопировать и перезапуститься оттуда
+  # 4) Если скрипт не в /opt/crg — скопировать и перезапуститься оттуда
   if (( ! script_inside )); then
     local target="$REQUIRED_DIR/$script_name"
     $SUDO cp "$script_path" "$target"
@@ -287,7 +267,7 @@ open_editor_blocking() {
 # -------------------- Действия после согласия --------------------
 download_and_prepare() {
   local BASE_DIR="$REQUIRED_DIR"
-  local TMP_DIR TARBALL
+  local TMP_DIR TARBALL RUNNING
   TMP_DIR="$(mktemp -d)"
   TARBALL="$TMP_DIR/GIS_Platform-master.tar.gz"
 
@@ -296,15 +276,15 @@ download_and_prepare() {
 
   log "[2/4] Извлекаю ресурсы..."
   mkdir -p "$BASE_DIR/assets"
-  tar -xzf "$TARBALL" --strip-components=2 -C "$BASE_DIR/assets" GIS_Platform-master/assets
+  sudo tar -xzf "$TARBALL" --strip-components=2 -C "$BASE_DIR/assets" GIS_Platform-master/assets
 
   log "[3/4] Извлекаю .env и compose..."
-  tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/.env.example
-  tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/coreApplication.yml
-  tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/openSources.yml
-
+  sudo tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/.env.example
+  sudo tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/coreApplication.yml
+  sudo tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/openSources.yml
+  
   log "[3.1/4] Извлекаю каталог scripts/..."
-  tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/scripts
+  sudo tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/scripts
 
   # Подготовка окружения
   if [[ -f "$BASE_DIR/.env" ]]; then
@@ -312,6 +292,35 @@ download_and_prepare() {
   else
     mv -f "$BASE_DIR/.env.example" "$BASE_DIR/.env"
     echo "[ok] Создан .env из шаблона .env.example"
+  fi
+
+  if [ -f "$BASE_DIR/.env" ]; then
+      set -a  # automatically export all variables
+      # Load .env but skip lines with dots in variable names (they are for Java tests)
+      while IFS= read -r line || [[ -n "$line" ]]; do
+          # Skip empty lines and comments
+          [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+          # Skip lines with dots in variable names (Java test variables)
+          [[ "$line" =~ ^[^=]*\.[^=]*= ]] && continue
+          # Export valid bash variables (allow variable references like ${VAR})
+          if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]]; then
+              eval "export $line"
+          fi
+      done <  "$BASE_DIR/.env"
+      set +a  # disable auto-export
+    fi
+    
+  echo "[info] Проверяю запущена ли предыдущая версия приложения."
+  RUNNING=$(docker ps  --format "{{.Image}}" | grep gismaster || true) 
+
+
+  if [ -n "$RUNNING" ]; then
+     
+     echo "[info] Останавливаю приложение."
+     docker compose -f ./coreApplication.yml -f ./openSources.yml --profile ui down --timeout $WAIT_TIMEOUT_SECS
+     
+     echo "[info] Удаляю старые образы."
+     docker images -q "gismaster/*" | while read IMAGE_ID; do docker rmi -f ${IMAGE_ID}; done
   fi
 
   # Права на всё под /opt/crg
