@@ -292,6 +292,8 @@ download_and_prepare() {
     echo "[ok] Создан .env из шаблона .env.example"
   fi
 
+  sudo chown "$(id -u)":"$(id -g)" "$BASE_DIR/.env" 2>/dev/null || true
+
   if [ -f "$BASE_DIR/.env" ]; then
       set -a  # automatically export all variables
       # Load .env but skip lines with dots in variable names (they are for Java tests)
