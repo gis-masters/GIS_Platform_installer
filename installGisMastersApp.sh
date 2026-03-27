@@ -3,7 +3,6 @@
 set -Eeuo pipefail
 
 # -------------------- Константы --------------------
-REQUIRED_DIR="/opt/crg"          # целевой каталог установки; скрипт сам обеспечит запуск из него
 REQUIRED_FREE_GB=40              # минимум свободного места (ГБ)
 REQUIRED_RAM_GB=32               # минимум ОЗУ (ГБ)
 MAX_KERNEL_MAJOR=6               # ядро должно быть НЕ НОВЕЕ 6.8.x (6.9+ и 6.13 — не подходят)
@@ -79,63 +78,60 @@ ask_yes_no() {
 
 # -------------------- Bootstrap: обеспечить работу в /opt/crg --------------------
 bootstrap_target_dir() {
-  local script_path script_name script_inside=0 SUDO=""
-  script_path="$(realpath "$0" 2>/dev/null || echo "")"
-  script_name="$(basename "${script_path:-installGisMastersApp.sh}")"
+  local SUDO=""
   [[ $EUID -ne 0 && -x "$(command -v sudo)" ]] && SUDO="sudo"
+  local ans="" DEFAULT_DIR="/opt/crg"
+  
+  #ищем контейнер с примонтированной папкой
+  local mountpoint=$(docker inspect $(docker ps -aqf "name=crg-data-service") --format='{{range .Mounts}}{{.Source}} {{println}}{{end}}' 2>/dev/null | grep -o '^.*/file_storage' | sed 's|/file_storage||')
+  REQUIRED_DIR=$mountpoint
 
-  # 1) Каталог существует?
-  if [[ ! -d "$REQUIRED_DIR" ]]; then
-    echo "Каталог $REQUIRED_DIR не существует."
-    if ask_yes_no "Создать $REQUIRED_DIR и выдать права (777)?"; then
-      $SUDO mkdir -p "$REQUIRED_DIR"
-      $SUDO chmod -R 777 "$REQUIRED_DIR" || true
+  if [[ -z $REQUIRED_DIR ]]; then
+    while true; do
+      read -r -p "Укажите папку расположения данных [$DEFAULT_DIR]: " ans || ans=$DEFAULT_DIR
+      if [[ -z $ans ]]; then
+        # Пользователь выбрал расположение по умолчанию
+        REQUIRED_DIR=$DEFAULT_DIR
+        break
+      else
+        local regex='^[a-zA-Z0-9_/-]*$'
+        if [[ $ans =~ $regex ]]; then
+          #Удаляем / в конце
+          REQUIRED_DIR=$(echo "$ans" | sed 's:/*$::')
+          break
+        else 
+          echo -e "\e[33mПапка должна содержать в пути только английские буквы, цифры, символы _ -\e[0m"
+        fi
+      fi
+    done
+
+    if [ -e "$REQUIRED_DIR" ] && [ ! -d "$REQUIRED_DIR" ]; then
+      echo "Ошибка: Существует файл '$REQUIRED_DIR' это не папка"
+      exit 1
+    fi
+
+    if [ -d "$REQUIRED_DIR" ]; then
+      echo "Папка '$REQUIRED_DIR' существует"
+      local perms; perms="$(stat -c '%a' "$REQUIRED_DIR" 2>/dev/null || echo "")"
+      if [[ "$perms" != "777" ]] ; then
+        if  ask_yes_no "Выдать права (777) на $REQUIRED_DIR?"; then
+          $SUDO chmod -R 777 "$REQUIRED_DIR" || true
+        else
+          echo "Отменено пользователем."; exit 1
+        fi
+      fi
     else
-      echo "Отменено пользователем."; exit 1
+      if ask_yes_no "Создать $REQUIRED_DIR и выдать права (777)?"; then
+        $SUDO mkdir -p "$REQUIRED_DIR"
+        $SUDO chmod -R 777 "$REQUIRED_DIR" || true
+      else
+        echo "Отменено пользователем."; exit 1
+      fi
     fi
   fi
-
-  # 2) Выдать права 777, если не так
-  local perms; perms="$(stat -c '%a' "$REQUIRED_DIR" 2>/dev/null || echo "")"
-  if [[ "$perms" != "777" ]]; then
-    $SUDO chmod -R 777 "$REQUIRED_DIR" || true
-  fi
-
-  # 3) Скрипт уже внутри /opt/crg?
-  if [[ -n "$script_path" && "$script_path" == "$REQUIRED_DIR/"* ]]; then script_inside=1; fi
-
-
-  # 4) Если скрипт не в /opt/crg — скопировать и перезапуститься оттуда
-  if (( ! script_inside )); then
-    local target="$REQUIRED_DIR/$script_name"
-    $SUDO cp "$script_path" "$target"
-    $SUDO chown "$(id -u)":"$(id -g)" "$target" 2>/dev/null || true
-    $SUDO chmod +x "$target"
-    echo "[reexec] Перезапускаю установщик из $REQUIRED_DIR..."
-    cd "$REQUIRED_DIR" || true
-    exec "$target" "$@"
-  else
-    cd "$REQUIRED_DIR" || true
-  fi
+  echo "Данные приложения расположены в $REQUIRED_DIR"
 }
 
-# -------------------- Проверки --------------------
-check_crg_dir() {
-  local sd perms
-  sd="$(cd "$(dirname "$(realpath "$0")")" && pwd -P)"
-
-  if [[ -d "$REQUIRED_DIR" ]]; then ok "Каталог $REQUIRED_DIR существует"
-  else bad "Каталог $REQUIRED_DIR отсутствует"; ISSUES+=("Нет каталога $REQUIRED_DIR"); fi
-
-  if [[ "$sd" == "$REQUIRED_DIR" ]]; then ok "Скрипт расположен в $REQUIRED_DIR"
-  else bad "Скрипт расположен не в $REQUIRED_DIR (фактически: $sd)"; ISSUES+=("Скрипт не находится в $REQUIRED_DIR"); fi
-
-  if [[ -d "$REQUIRED_DIR" ]]; then
-    perms="$(stat -c '%a' "$REQUIRED_DIR" 2>/dev/null || true)"
-    if [[ "$perms" == "777" ]]; then ok "Права на $REQUIRED_DIR: 777"
-    else bad "Права на $REQUIRED_DIR: $perms (требуются 777)"; ISSUES+=("Права $REQUIRED_DIR ≠ 777"); fi
-  fi
-}
 
 check_os() {
   if [[ -r /etc/os-release ]]; then
@@ -314,11 +310,9 @@ download_and_prepare() {
   echo "[info] Проверяю запущена ли предыдущая версия приложения."
   RUNNING=$(docker ps  --format "{{.Image}}" | grep gismaster || true)
 
-
   if [ -n "$RUNNING" ]; then
-
      echo "[info] Останавливаю приложение и удаляю старые образы."
-     docker compose -f ./coreApplication.yml -f ./openSources.yml --profile "*" down --rmi all
+     docker compose -f $BASE_DIR/coreApplication.yml -f $BASE_DIR/openSources.yml --profile "*" down #--rmi all
   fi
 
   # Права на всё под /opt/crg
@@ -339,8 +333,10 @@ download_and_prepare() {
     # поэтому перечитываем его только здесь.
     load_env_file "$BASE_DIR/.env"
 
-    export GEOSERVER_DATA_DIR=${GEOSERVER_DATA_DIR:-/opt/crg/data/geoserver}
-    export DB_DATA_DIR=${DB_DATA_DIR:-/opt/crg/data/postgres}
+    export CRG_DATA_DIR=$REQUIRED_DIR
+    export GEOSERVER_DATA_DIR=${GEOSERVER_DATA_DIR:-${CRG_DATA_DIR}/data/geoserver}
+    export DB_DATA_DIR=${DB_DATA_DIR:-${CRG_DATA_DIR}/data/postgres}
+    cd "$BASE_DIR"
     pushd ./assets/ || exit
     
     ./migration-scripts/run.sh "${CRG_USER}" "${DB_PASS}" "${SECURITY_JWT_SECRET}" "${GEOSERVER_UI_LOGIN}" "${GEOSERVER_UI_CRYPTED_PASSWORD}"
@@ -406,7 +402,6 @@ download_and_prepare() {
 bootstrap_target_dir "$@"
 
 log "=== Предварительная проверка окружения ==="
-check_crg_dir
 check_os
 check_kernel
 check_ram
