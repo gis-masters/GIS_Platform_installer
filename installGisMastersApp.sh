@@ -312,7 +312,7 @@ download_and_prepare() {
 
   if [ -n "$RUNNING" ]; then
      echo "[info] Останавливаю приложение и удаляю старые образы."
-     docker compose -f $BASE_DIR/coreApplication.yml -f $BASE_DIR/openSources.yml --profile "*" down #--rmi all
+     docker compose -f $BASE_DIR/coreApplication.yml -f $BASE_DIR/openSources.yml --profile "*" down --rmi all
   fi
 
   # Права на всё под /opt/crg
