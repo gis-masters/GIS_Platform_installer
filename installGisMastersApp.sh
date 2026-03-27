@@ -264,6 +264,23 @@ open_editor_blocking() {
   fi
 }
 
+load_env_file() {
+  local env_file="$1"
+
+  [[ -f "$env_file" ]] || return 0
+
+  set -a
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ "$line" =~ ^[^=]*\.[^=]*= ]] && continue
+
+    if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]]; then
+      eval "export $line"
+    fi
+  done < "$env_file"
+  set +a
+}
+
 # -------------------- Действия после согласия --------------------
 download_and_prepare() {
   local BASE_DIR="$REQUIRED_DIR"
@@ -282,7 +299,7 @@ download_and_prepare() {
   sudo tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/.env.example
   sudo tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/coreApplication.yml
   sudo tar -xzf "$TARBALL" --strip-components=1 -C "$BASE_DIR" GIS_Platform-master/openSources.yml
-  
+
 
   # Подготовка окружения
   if [[ -f "$BASE_DIR/.env" ]]; then
@@ -294,28 +311,12 @@ download_and_prepare() {
 
   sudo chown "$(id -u)":"$(id -g)" "$BASE_DIR/.env" 2>/dev/null || true
 
-  if [ -f "$BASE_DIR/.env" ]; then
-      set -a  # automatically export all variables
-      # Load .env but skip lines with dots in variable names (they are for Java tests)
-      while IFS= read -r line || [[ -n "$line" ]]; do
-          # Skip empty lines and comments
-          [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-          # Skip lines with dots in variable names (Java test variables)
-          [[ "$line" =~ ^[^=]*\.[^=]*= ]] && continue
-          # Export valid bash variables (allow variable references like ${VAR})
-          if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]]; then
-              eval "export $line"
-          fi
-      done <  "$BASE_DIR/.env"
-      set +a  # disable auto-export
-    fi
-    
   echo "[info] Проверяю запущена ли предыдущая версия приложения."
-  RUNNING=$(docker ps  --format "{{.Image}}" | grep gismaster || true) 
+  RUNNING=$(docker ps  --format "{{.Image}}" | grep gismaster || true)
 
 
   if [ -n "$RUNNING" ]; then
-     
+
      echo "[info] Останавливаю приложение и удаляю старые образы."
      docker compose -f ./coreApplication.yml -f ./openSources.yml --profile "*" down --rmi all
   fi
@@ -334,6 +335,9 @@ download_and_prepare() {
 
   # --- helper: единый запуск и ожидание ---
   start_platform() {
+    # .env может быть отредактирован пользователем прямо перед запуском,
+    # поэтому перечитываем его только здесь.
+    load_env_file "$BASE_DIR/.env"
 
     export GEOSERVER_DATA_DIR=${GEOSERVER_DATA_DIR:-/opt/crg/data/geoserver}
     export DB_DATA_DIR=${DB_DATA_DIR:-/opt/crg/data/postgres}
