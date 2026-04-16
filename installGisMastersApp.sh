@@ -232,33 +232,118 @@ wait_for_containers() {
   fi
   return 1       # прочие ошибки
 }
-
-# -------------------- Выбор и запуск редактора --------------------
-choose_editor() {
-  # Не используем vim/*vim*
-  if [[ -n "${EDITOR:-}" ]] && has_cmd "$EDITOR" && [[ "$EDITOR" != *vim* ]]; then
-    printf "%s\n" "$EDITOR"; return
-  fi
-  if has_cmd nano;  then printf "nano\n";  return; fi
-  if has_cmd ed;    then printf "ed\n";    return; fi
-  if has_cmd gedit; then printf "gedit\n"; return; fi
-  printf "\n"
+#----------------------- Ввод логина и пароля --------------------------
+validate_email() {
+    if [[ "$1" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        return 0
+    else
+        return 1
+    fi
 }
 
-open_editor_blocking() {
-  local file="$1"
-  local ed; ed="$(choose_editor)"
-  if [[ -z "$ed" ]]; then
-    bad "Не найден подходящий редактор (nano/ed/gedit). Установите nano: sudo apt-get update && sudo apt-get install -y nano"
-    exit 1
-  fi
-  echo "[info] Открываю файл в редакторе: $ed"
-  if [[ "$ed" == "gedit" ]]; then
-    gedit --wait "$file"
-  else
-    "$ed" "$file"
-  fi
+ask_login() {
+    # Считываем логин
+    while true; do
+        read -p "Введите логин администратора, в виде электронной почты: " LOGIN
+        if validate_email "$LOGIN"; then
+            break
+        else
+            bad "Неверный формат электронной почты. Попробуйте еще раз."
+        fi
+    done
 }
+
+validate_password_strength() {
+    local password="$1"
+    local strength=0
+    local feedback=""
+
+    if [[ -z "$password" ]]; then
+        feedback+="  - Пароль не может быть пустым\n"
+    fi
+
+    if [[ ${#password} -ge 8 ]]; then
+        ((strength++))
+    else
+        feedback+="  - Миннимум 8 символов\n"
+    fi
+    
+    if [[ "$password" =~ [A-Z] ]]; then
+        ((strength++))
+    else
+        feedback+="  - Мининмум одна заглавная буква (A-Z)\n"
+    fi
+    
+    if [[ "$password" =~ [a-z] ]]; then
+        ((strength++))
+    else
+        feedback+="  - Миннимум одна буква в ниженм регистре (a-z)\n"
+    fi
+
+    if [[ "$password" =~ [0-9] ]]; then
+        ((strength++))
+    else
+        feedback+="  - Минимум одна цифра (0-9)\n"
+    fi
+    
+    if [[ $strength -eq 4 ]]; then
+        echo "strong"
+        return 0
+    else
+        echo -e "weak\n$feedback"
+        return 2
+    fi
+}
+
+ask_password() {
+    while true; do
+        read -sp "Введите пароль администратора: " PASSWORD
+        
+        # Проверяем устойчивость пароля
+        local strength_result=$(validate_password_strength "$PASSWORD")
+        local strength=$(echo "$strength_result" | head -1)
+        local feedback=$(echo "$strength_result" | tail -n+2)
+        case $strength in
+            "strong")
+                echo "✓ Устойчивость пароля: СИЛЬНАЯ"
+                break
+                ;;
+            "weak")
+                echo "✗ Устойчивость пароля: СЛАБАЯ"
+                echo "Ошибки:"
+                echo -e $feedback
+                if ! ask_yes_no 'Попробовать снова?'; then
+                    exit 1;
+                fi
+                ;;
+        esac
+    done
+
+    # Подтверждение паролей
+    if [[ "$strength_result" == "strong" ]] then
+        while true; do
+            read -sp "Подтвердите пароль: " password_confirm
+            echo ""
+            
+            if [[ "$PASSWORD" == "$password_confirm" ]]; then
+                echo "✓ Пароль подтвержден"
+                break
+            else
+                echo "✗ Пароли не совпадают. Попробуйте снова."
+            fi
+        done
+    fi
+}
+
+generate_password(){
+    PASSWORD=$(</dev/urandom tr -dc 'A-Za-z0-9' | head -c8; echo)
+    PASSWORD="${PASSWORD:0:8}"
+    while ! [[ "$PASSWORD" =~ [A-Z] && "$PASSWORD" =~ [a-z] && "$PASSWORD" =~ [0-9] ]]; do
+        PASSWORD=$(</dev/urandom tr -dc 'A-Za-z0-9' | head -c8; echo)
+        PASSWORD="${PASSWORD:0:8}"
+    done
+}
+
 
 load_env_file() {
   local env_file="$1"
@@ -277,10 +362,101 @@ load_env_file() {
   set +a
 }
 
+update_env() {
+  local env_file="$BASE_DIR/.env"
+  local tmp_file=".env.tmp"
+
+  if [[ ! -f "$env_file" ]]; then
+    echo "Файл $env_file не найден!"
+    return 1
+  fi
+
+  # Формируем awk-скрипт
+  local awk_script='BEGIN{OFS="="}'
+  for arg in "$@"; do
+    local key="${arg%%=*}"   # всё до "="
+    local value="${arg#*=}"  # всё после "="
+    awk_script+=" \$1==\"$key\"{\$2=\"$value\"}"
+  done
+  awk_script+=' {print}'
+
+  # Запускаем awk
+  awk -F= "$awk_script" "$env_file" > "$tmp_file" && mv "$tmp_file" "$env_file"
+}
+
+
+start_platform() {
+    # .env может быть отредактирован пользователем прямо перед запуском,
+    # поэтому перечитываем его только здесь.
+    load_env_file "$BASE_DIR/.env"
+
+    local RUNNING=$(docker ps  --format "{{.Image}}" | grep gismaster || true)
+    if [ -n "$RUNNING" ]; then
+     echo "[info] Останавливаю приложение и удаляю старые образы."
+     docker compose -f $BASE_DIR/coreApplication.yml -f $BASE_DIR/openSources.yml --profile "*" down --rmi all
+    fi
+
+    export CRG_DATA_DIR=$REQUIRED_DIR
+    export GEOSERVER_DATA_DIR=${GEOSERVER_DATA_DIR:-${CRG_DATA_DIR}/data/geoserver}
+    export DB_DATA_DIR=${DB_DATA_DIR:-${CRG_DATA_DIR}/data/postgres}
+    cd "$BASE_DIR"
+    pushd ./assets/ || exit
+    
+    ./migration-scripts/run.sh "${CRG_USER}" "${DB_PASS}" "${SECURITY_JWT_SECRET}" "${GEOSERVER_UI_LOGIN}" "${GEOSERVER_UI_CRYPTED_PASSWORD}"
+    
+    popd || exit
+    docker compose -f ./coreApplication.yml \
+        -f ./openSources.yml \
+        --env-file ./.env \
+        --profile ui up -d
+
+    echo "[wait] Ожидаю, пока контейнеры включатся (до 3 минут)..."
+    while true; do
+      wait_for_containers
+      HOST_IP="$(first_ip)"
+      if [[ $? -eq 0 ]]; then
+        log "Установка прошла успешно. Вы можете открыть страницу проекта по ссылке http://$HOST_IP . Либо зарегистрировать свою организацию по ссылке http://$HOST_IP/register"
+      elif  [[ $? -eq 2 ]] ; then
+        log "Восстановление пароля недоступно."
+      else 
+        echo "Установка завершена с ошибкой. Обратитесь к издателю за деталями."
+        if ask_yes_no "На слабом сервере время включения всех контейнеров может быть больше. Желаете подождать
+           ещё 3 минуты? (вы можете отвечать Да столько раз, сколько будет необходимо)"; then
+             echo "[wait] Ожидаю еще раз, пока контейнеры станут healthy (до 3 минут)..."
+          continue
+        else
+          echo "Установка прервана пользователем."
+          exit 1
+        fi
+      fi
+      log "Системный логин: $SYSTEM_ADMIN_LOGIN"
+      log "Системный пароль: $SYSTEM_ADMIN_PASSWORD"
+      log "Настройки сохранены в $BASE_DIR/.env"
+
+      HOST_PORT=$(docker port "crg-ui" "80/tcp" 2>/dev/null | cut -d':' -f2)
+      log "Доступ на портал:"
+      log "Url: http://$HOST_IP:$HOST_PORT"
+      log "ТУТ ДОЛЖНО БЫТЬ ОПИСАНИЕ"
+      HOST_PORT=$(docker port "postgis" "5432/tcp" 2>/dev/null | cut -d':' -f2)
+      log "Доступ на PostgreSQL" 
+      log "Хост, порт: $HOST_IP:$HOST_PORT"
+      log "ТУТ ДОЛЖНО БЫТЬ ОПИСАНИЕ"
+      HOST_PORT=$(docker port "geoserver" "8080/tcp" 2>/dev/null | cut -d':' -f2)
+      log "Доступ на Geoserver"
+      log "Url: http://$HOST_IP:$HOST_PORT/geoserver/web"
+      log "ТУТ ДОЛЖНО БЫТЬ ОПИСАНИЕ"
+      HOST_PORT=$(docker port "rabbitmq" "15672/tcp" 2>/dev/null | cut -d':' -f2)
+      log "Доступ на Rabbit"
+      log "Url: http://$HOST_IP:$HOST_PORT/"
+      log "ТУТ ДОЛЖНО БЫТЬ ОПИСАНИЕ"
+      exit 0
+    done
+  }
+
 # -------------------- Действия после согласия --------------------
 download_and_prepare() {
   local BASE_DIR="$REQUIRED_DIR"
-  local TMP_DIR TARBALL RUNNING
+  local TMP_DIR TARBALL
   TMP_DIR="$(mktemp -d)"
   TARBALL="$TMP_DIR/GIS_Platform-master.tar.gz"
 
@@ -307,14 +483,6 @@ download_and_prepare() {
 
   sudo chown "$(id -u)":"$(id -g)" "$BASE_DIR/.env" 2>/dev/null || true
 
-  echo "[info] Проверяю запущена ли предыдущая версия приложения."
-  RUNNING=$(docker ps  --format "{{.Image}}" | grep gismaster || true)
-
-  if [ -n "$RUNNING" ]; then
-     echo "[info] Останавливаю приложение и удаляю старые образы."
-     docker compose -f $BASE_DIR/coreApplication.yml -f $BASE_DIR/openSources.yml --profile "*" down --rmi all
-  fi
-
   # Права на всё под /opt/crg
   chmod -R +x "$BASE_DIR" 2>/dev/null || true
 
@@ -324,83 +492,58 @@ download_and_prepare() {
   echo
   echo "Готово! В каталоге $BASE_DIR появились:"
   echo " - папка assets"
-  echo " - файлы: .env, gis_masters_ru_start.yml"
+  echo " - файлы: .env, coreApplication.yml, openSources.yml"
   echo
 
-  # --- helper: единый запуск и ожидание ---
-  start_platform() {
-    # .env может быть отредактирован пользователем прямо перед запуском,
-    # поэтому перечитываем его только здесь.
-    load_env_file "$BASE_DIR/.env"
+  echo "[info] Проверяю запущена ли предыдущая версия приложения."
+  local RUNNING=$(docker ps  --format "{{.Image}}" | grep gismaster || true)
+  
+  #если это первая установка
+  if [ -z "$RUNNING" ]; then
 
-    export CRG_DATA_DIR=$REQUIRED_DIR
-    export GEOSERVER_DATA_DIR=${GEOSERVER_DATA_DIR:-${CRG_DATA_DIR}/data/geoserver}
-    export DB_DATA_DIR=${DB_DATA_DIR:-${CRG_DATA_DIR}/data/postgres}
-    cd "$BASE_DIR"
-    pushd ./assets/ || exit
-    
-    ./migration-scripts/run.sh "${CRG_USER}" "${DB_PASS}" "${SECURITY_JWT_SECRET}" "${GEOSERVER_UI_LOGIN}" "${GEOSERVER_UI_CRYPTED_PASSWORD}"
-    
-    popd || exit
-    docker compose -f ./coreApplication.yml \
-        -f ./openSources.yml \
-        --env-file ./.env \
-        --profile ui up -d
-
-    echo "[wait] Ожидаю, пока контейнеры включатся (до 3 минут)..."
-    while true; do
-      if wait_for_containers; then
-        HOST_IP="$(first_ip)"
-        echo "Установка прошла успешно. Вы можете открыть страницу проекта по ссылке http://$HOST_IP . Либо зарегистрировать свою организацию по ссылке http://$HOST_IP/register"
-        exit 0
-      else
-        case $? in
-          2)
-            HOST_IP="$(first_ip)"
-            echo "Установка прошла успешно. Некорректны переменные для восстановления пароля по email. Остальной функционал работает. Проект: http://$HOST_IP , регистрация: http://$HOST_IP/register . Восстановление пароля недоступно."
-            exit 0
-            ;;
-          *)
-            echo "Установка завершена с ошибкой. Обратитесь к издателю за деталями."
-            if ask_yes_no "На слабом сервере время включения всех контейнеров может быть больше. Желаете подождать
-            ещё 3 минуты? (вы можете отвечать Да столько раз, сколько будет необходимо)"; then
-              echo "[wait] Ожидаю еще раз, пока контейнеры станут healthy (до 3 минут)..."
-              continue
-            else
-              echo "Установка прервана пользователем."
-              exit 1
-            fi
-            ;;
-        esac
-      fi
-    done
-  }
-
-  # Диалог редактирования .env
-  echo "При редактировании .env необходимо указать корректные значения SPRING_MAIL_USERNAME и SPRING_MAIL_PASSWORD."
-  echo "При ошибке в переменных платформа будет работать, однако восстановление пароля будет недоступно."
-  echo "Подробнее о переменных: https://github.com/gis-masters/GIS_Platform"
-
-  if ask_yes_no "Вы желаете отредактировать файл .env?"; then
-    open_editor_blocking "$BASE_DIR/.env"
-    if ask_yes_no "Приступить к запуску?"; then
-      start_platform "$BASE_DIR"
+    if ask_yes_no "Указать логин администратора?"; then
+      ask_login
     else
-      exit 0
+      LOGIN="gis@master.ru"
+      echo "Будет использован логин по умолчанию: $LOGIN"
     fi
-  else
-    printf "\n\033[1;33m[ВНИМАНИЕ]\033[0m Приложение будет запущено с настройками по умолчанию.\n" >&2
-    printf "\033[1;33m[ВНИМАНИЕ]\033[0m Функция восстановления пароля \033[1mнедоступна\033[0m.\n" >&2
-    echo "Запуск через 10 секунд… Нажмите Ctrl+C для отмены." >&2
-    sleep 10
-    start_platform "$BASE_DIR"
+
+    if ask_yes_no "Указать пароль администратора? Миннимум 8 символов, цифры, заглавные и строчные буквы."; then
+      ask_password
+    else
+      echo "Пароль администратора будет сгененрирован автоматически"
+      generate_password
+      echo "Пароль $PASSWORD"
+    fi
+    
+    local output
+    mapfile -t output < <(docker run --rm gismaster/gis-platform-ph "$PASSWORD")
+    FLYWAY_PASSWORD="${output[0]}"
+    GEOSERVER_PASSWORD="${output[1]}"
+
+
+    update_env SYSTEM_ADMIN_LOGIN=$LOGIN SYSTEM_ADMIN_PASSWORD=$PASSWORD \
+              CRG_USER=$LOGIN DB_PASS=$PASSWORD \
+              SECURITY_JWT_CLIENT_ID=$LOGIN SECURITY_JWT_CLIENT_SECRET=$PASSWORD \
+              GEOSERVER_UI_LOGIN=$LOGIN SECURITY_JWT_SECRET=$PASSWORD \
+              RABBIT_USER=$LOGIN RABBIT_PASS=$PASSWORD \
+              REDIS_PASS=$PASSWORD CAMUNDA_BPM_ADMIN_USER_ID=$LOGIN \
+              CAMUNDA_BPM_ADMIN_USER_PASSWORD=$PASSWORD \
+              GEOSERVER_UI_CRYPTED_PASSWORD=$GEOSERVER_PASSWORD \
+              CRG_OPTIONS_SYSTEM_ADMIN_CRYPTED_PASSWORD=$GEOSERVER_PASSWORD \
+              SPRING_FLYWAY_PLACEHOLDERS_ADMIN_PASSWORD=\'$FLYWAY_PASSWORD\' \
+              SPRING_MAIL_USERNAME=GisPlatform@yandex.ru \
+              SPRING_MAIL_PASSWORD=ibhcizcxxbzyktvl
   fi
+  
+  echo "Запуск через 10 секунд… Нажмите Ctrl+C для отмены." >&2
+  sleep 10
+
+
+  start_platform "$BASE_DIR"
 }
 
 # -------------------- Главный поток --------------------
-# Всегда первым делом обеспечиваем работу из /opt/crg (создание/очистка/перезапуск)
-bootstrap_target_dir "$@"
-
 log "=== Предварительная проверка окружения ==="
 check_os
 check_kernel
@@ -410,6 +553,9 @@ check_network
 have_fetcher
 check_docker
 log "========================================="
+
+# Всегда первым делом обеспечиваем работу из /opt/crg (создание/очистка/перезапуск)
+bootstrap_target_dir "$@"
 
 if (( ${#ISSUES[@]} == 0 )); then
   echo "Все параметры соответствуют ожидаемым."
