@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# installGisMastersApp.sh — проверка окружения + загрузка ресурсов + диалог редактирования .env + запуск и ожидание контейнеров
+# installGisMastersApp.sh — проверка окружения + загрузка ресурсов  + запуск и ожидание контейнеров
 set -Eeuo pipefail
 
 # -------------------- Константы --------------------
@@ -52,7 +52,7 @@ have_fetcher() {
 
 fetch_to_file() {
   local url="$1" out="$2"
-  if has_cmd curl; then curl -fsSL "$url" -o "$out"
+  if has_cmd curl; then curl -fSL "$url" -o "$out"
   else wget -qO "$out" "$url"
   fi
 }
@@ -248,7 +248,10 @@ ask_login() {
         if validate_email "$LOGIN"; then
             break
         else
-            bad "Неверный формат электронной почты. Попробуйте еще раз."
+            bad "Неверный формат электронной почты. Введите другой логин. Например user@example.com."
+            if ! ask_yes_no 'Попробовать снова?'; then
+              exit 1;
+            fi
         fi
     done
 }
@@ -298,7 +301,7 @@ validate_password_strength() {
 ask_password() {
     while true; do
         read -sp "Введите пароль администратора: " PASSWORD
-        
+        echo ""
         # Проверяем устойчивость пароля
         local strength_result=$(validate_password_strength "$PASSWORD")
         local strength=$(echo "$strength_result" | head -1)
@@ -329,7 +332,10 @@ ask_password() {
                 echo "✓ Пароль подтвержден"
                 break
             else
-                echo "✗ Пароли не совпадают. Попробуйте снова."
+                echo "✗ Пароли не совпадают."
+                if ! ask_yes_no 'Попробовать снова?'; then
+                    exit 1;
+                fi
             fi
         done
     fi
@@ -363,8 +369,8 @@ load_env_file() {
 }
 
 update_env() {
-  local env_file="$BASE_DIR/.env"
-  local tmp_file=".env.tmp"
+  local env_file="$BASE_DIR/settings.env"
+  local tmp_file="settings.env.tmp"
 
   if [[ ! -f "$env_file" ]]; then
     echo "Файл $env_file не найден!"
@@ -388,12 +394,12 @@ update_env() {
 start_platform() {
     # .env может быть отредактирован пользователем прямо перед запуском,
     # поэтому перечитываем его только здесь.
-    load_env_file "$BASE_DIR/.env"
+    load_env_file "$BASE_DIR/settings.env"
 
     local RUNNING=$(docker ps  --format "{{.Image}}" | grep gismaster || true)
     if [ -n "$RUNNING" ]; then
      echo "[info] Останавливаю приложение и удаляю старые образы."
-     docker compose -f $BASE_DIR/coreApplication.yml -f $BASE_DIR/openSources.yml --profile "*" down --rmi all
+     docker compose -f $BASE_DIR/coreApplication.yml -f $BASE_DIR/openSources.yml --profile "*" down  --rmi all
     fi
 
     export CRG_DATA_DIR=$REQUIRED_DIR
@@ -407,7 +413,7 @@ start_platform() {
     popd || exit
     docker compose -f ./coreApplication.yml \
         -f ./openSources.yml \
-        --env-file ./.env \
+        --env-file ./settings.env \
         --profile ui up -d
 
     echo "[wait] Ожидаю, пока контейнеры включатся (до 3 минут)..."
@@ -429,26 +435,28 @@ start_platform() {
           exit 1
         fi
       fi
-      log "Системный логин: $SYSTEM_ADMIN_LOGIN"
-      log "Системный пароль: $SYSTEM_ADMIN_PASSWORD"
-      log "Настройки сохранены в $BASE_DIR/.env"
 
-      HOST_PORT=$(docker port "crg-ui" "80/tcp" 2>/dev/null | cut -d':' -f2)
-      log "Доступ на портал:"
-      log "Url: http://$HOST_IP:$HOST_PORT"
-      log "ТУТ ДОЛЖНО БЫТЬ ОПИСАНИЕ"
+      echo ""
+      echo ""
+      echo "================================================"
+      {
+      echo "Системный логин| $SYSTEM_ADMIN_LOGIN"
+      echo "Системный пароль| $SYSTEM_ADMIN_PASSWORD"
+      echo "|"
+      echo "Доступ на портал| http://$HOST_IP"
+      echo "Описание|Через системнй пароль доступен веб-интерфейс администратора платформы для управления настройками зарегистированных организаций."
       HOST_PORT=$(docker port "postgis" "5432/tcp" 2>/dev/null | cut -d':' -f2)
-      log "Доступ на PostgreSQL" 
-      log "Хост, порт: $HOST_IP:$HOST_PORT"
-      log "ТУТ ДОЛЖНО БЫТЬ ОПИСАНИЕ"
+      echo "Доступ на PostgreSQL|$HOST_IP:$HOST_PORT"
+      echo "Описание|База данных платформы для хранения структурированных данных, геоданных и служебной информации."
       HOST_PORT=$(docker port "geoserver" "8080/tcp" 2>/dev/null | cut -d':' -f2)
-      log "Доступ на Geoserver"
-      log "Url: http://$HOST_IP:$HOST_PORT/geoserver/web"
-      log "ТУТ ДОЛЖНО БЫТЬ ОПИСАНИЕ"
+      echo "Доступ на Geoserver|http://$HOST_IP:$HOST_PORT/geoserver/web"
+      echo "Описание|Сервис публикации и визуализации геоданных на карте через геосервисы платформы."
       HOST_PORT=$(docker port "rabbitmq" "15672/tcp" 2>/dev/null | cut -d':' -f2)
-      log "Доступ на Rabbit"
-      log "Url: http://$HOST_IP:$HOST_PORT/"
-      log "ТУТ ДОЛЖНО БЫТЬ ОПИСАНИЕ"
+      echo "Доступ на Rabbit| http://$HOST_IP:$HOST_PORT/"
+      echo "Описание|Сервис очередей сообщений для обмена данными между внутренними компонентами платформы."
+      echo "|"
+      echo "Настройки сохранены в| $BASE_DIR/settings.env"
+      } | column -t -s '|'
       exit 0
     done
   }
@@ -474,14 +482,14 @@ download_and_prepare() {
 
 
   # Подготовка окружения
-  if [[ -f "$BASE_DIR/.env" ]]; then
-    echo "[info] Файл .env уже существует — не перезаписываю."
+  if [[ -f "$BASE_DIR/settings.env" ]]; then
+    echo "[info] Файл settings.env уже существует — не перезаписываю."
   else
-    mv -f "$BASE_DIR/.env.example" "$BASE_DIR/.env"
-    echo "[ok] Создан .env из шаблона .env.example"
+    mv -f "$BASE_DIR/.env.example" "$BASE_DIR/settings.env"
+    echo "[ok] Создан settings.env из шаблона .env.example"
   fi
 
-  sudo chown "$(id -u)":"$(id -g)" "$BASE_DIR/.env" 2>/dev/null || true
+  sudo chown "$(id -u)":"$(id -g)" "$BASE_DIR/settings.env" 2>/dev/null || true
 
   # Права на всё под /opt/crg
   chmod -R +x "$BASE_DIR" 2>/dev/null || true
@@ -492,31 +500,26 @@ download_and_prepare() {
   echo
   echo "Готово! В каталоге $BASE_DIR появились:"
   echo " - папка assets"
-  echo " - файлы: .env, coreApplication.yml, openSources.yml"
+  echo " - файлы: settings.env, coreApplication.yml, openSources.yml"
   echo
 
-  echo "[info] Проверяю запущена ли предыдущая версия приложения."
   local RUNNING=$(docker ps  --format "{{.Image}}" | grep gismaster || true)
   
   #если это первая установка
   if [ -z "$RUNNING" ]; then
-
-    if ask_yes_no "Указать логин администратора?"; then
+    LOGIN="gis@master.ru"
+    if ask_yes_no "Указать логин администратора? (по умолчанию $LOGIN)"; then
       ask_login
-    else
-      LOGIN="gis@master.ru"
-      echo "Будет использован логин по умолчанию: $LOGIN"
     fi
 
-    if ask_yes_no "Указать пароль администратора? Миннимум 8 символов, цифры, заглавные и строчные буквы."; then
+    if ask_yes_no "Указать пароль администратора? Миннимум 8 символов, цифры, заглавные и строчные буквы. (Будет сгенерирован случайный)"; then
       ask_password
     else
-      echo "Пароль администратора будет сгененрирован автоматически"
       generate_password
-      echo "Пароль $PASSWORD"
     fi
     
     local output
+    docker pull gismaster/gis-platform-ph
     mapfile -t output < <(docker run --rm gismaster/gis-platform-ph "$PASSWORD")
     FLYWAY_PASSWORD="${output[0]}"
     GEOSERVER_PASSWORD="${output[1]}"
@@ -534,6 +537,8 @@ download_and_prepare() {
               SPRING_FLYWAY_PLACEHOLDERS_ADMIN_PASSWORD=\'$FLYWAY_PASSWORD\' \
               SPRING_MAIL_USERNAME=GisPlatform@yandex.ru \
               SPRING_MAIL_PASSWORD=ibhcizcxxbzyktvl
+  else
+   echo "[info] Выполняется обновление приложения."
   fi
   
   echo "Запуск через 10 секунд… Нажмите Ctrl+C для отмены." >&2
@@ -554,13 +559,13 @@ have_fetcher
 check_docker
 log "========================================="
 
-# Всегда первым делом обеспечиваем работу из /opt/crg (создание/очистка/перезапуск)
-bootstrap_target_dir "$@"
+
 
 if (( ${#ISSUES[@]} == 0 )); then
   echo "Все параметры соответствуют ожидаемым."
   echo "Ваш сервер подходит для установки приложения."
   if ask_yes_no "Начать установку приложения?"; then
+    bootstrap_target_dir "$@"
     download_and_prepare
   else
     exit 0
