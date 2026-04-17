@@ -593,9 +593,11 @@ else
   df -hT | awk 'NR==1 || /^\/dev\// {print "  "$0}'
   echo "IP адреса:   $(hostname -I 2>/dev/null || echo 'n/a')"
   echo "Скрипт в:    $(cd "$(dirname "$(realpath "$0")")" && pwd -P)"
-  if [[ -d "$REQUIRED_DIR" ]]; then
-    echo "Права $REQUIRED_DIR: $(stat -c '%a %U:%G' "$REQUIRED_DIR" 2>/dev/null || echo '?')"
-    ls -ld "$REQUIRED_DIR" 2>/dev/null || true
+  if [ -n "${REQUIRED_DIR+x}" ]; then
+    if [[ -d "$REQUIRED_DIR" ]]; then
+      echo "Права $REQUIRED_DIR: $(stat -c '%a %U:%G' "$REQUIRED_DIR" 2>/dev/null || echo '?')"
+      ls -ld "$REQUIRED_DIR" 2>/dev/null || true
+    fi
   fi
   if has_cmd docker; then
     echo "Docker версии:"
